@@ -20,7 +20,7 @@ This repository currently implements **Phase 1: ML Baseline**. The long-term roa
 
 1. **Clone the repository:**
    ```bash
-   git clone <your-github-repo-url>
+   git clone https://github.com/vignesh-off/Personalized-Legal-Education-and-Training-for-Law-Students.git
    cd legal-ai-tutor-app
    ```
 
