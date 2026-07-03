@@ -17,3 +17,27 @@ class DLPredictionOutput(BaseModel):
     dl_mastery_level: str = Field(..., description="Predicted mastery level by Deep Learning model")
     dl_confidence: float = Field(..., description="Confidence score of the DL prediction (0-100)")
     dl_message: str = Field(..., description="Explanation message from DL model")
+
+class EssayInput(BaseModel):
+    student_id: int
+    topic: str
+    essay_text: str
+
+class EssayOutput(BaseModel):
+    score: float
+    feedback: str
+    key_concepts_found: list[str]
+
+class ScenarioInput(BaseModel):
+    student_id: int
+    weak_topic: str
+
+class ScenarioOutput(BaseModel):
+    scenario_text: str
+    questions: list[str]
+
+class ChatInput(BaseModel):
+    query: str
+
+class ChatOutput(BaseModel):
+    response: str

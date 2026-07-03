@@ -95,8 +95,9 @@ def generate_global_insights(df):
 
 # ================= AUTHENTICATION =================
 CREDENTIALS = {
+    "admin": {"password": "admin123", "role": "Admin"},
     "student": {"password": "student123", "role": "Student", "student_id": 101},
-    "teacher": {"password": "teacher123", "role": "Teacher/Admin"}
+    "teacher": {"password": "teacher123", "role": "Teacher"}
 }
 
 def render_login():
@@ -129,6 +130,17 @@ def render_login():
 
 
 # ================= UI SECTIONS =================
+def render_access_denied():
+    st.markdown("""
+        <div style="text-align: center; padding: 4rem 2rem; background: linear-gradient(145deg, #1e1e1e, #2d1a1a); border-radius: 16px; border: 1px solid #ef4444; box-shadow: 0 10px 25px -5px rgba(239, 68, 68, 0.15); margin-top: 2rem;">
+            <div style="font-size: 5rem; margin-bottom: 1rem; text-shadow: 0 0 20px rgba(239, 68, 68, 0.5);">🛑</div>
+            <h2 style="color: #ef4444; font-size: 2.2rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 1rem;">Access Denied</h2>
+            <div style="height: 3px; background: linear-gradient(90deg, transparent, #ef4444, transparent); width: 60%; margin: 0 auto 1.5rem auto;"></div>
+            <p style="color: #e2e8f0; font-size: 1.2rem; font-weight: 500; margin-bottom: 0.5rem;">You don't have the necessary access to view this module.</p>
+            <p style="color: #94a3b8; font-size: 1rem;">🔒 This Analytics Dashboard is strictly reserved for Administrators.</p>
+        </div>
+    """, unsafe_allow_html=True)
+
 def render_header():
     st.markdown("""
         <div class="saas-header">
@@ -318,33 +330,85 @@ def render_prediction_panel(student_id, topic, score, time_spent, attempts, diff
         with st.expander("⚙️ View Raw API Response"):
             st.json({"ML_Output": data_ml, "DL_Output": data_dl if data_dl else "Failed/Timeout"})
 
+def render_bulk_upload():
+    st.markdown("### 📂 Bulk Upload Student Marks")
+    st.markdown("Upload a CSV file containing student marks. The file must contain the following columns: `student_id`, `topic`, `score`, `time_spent`, `attempts`, `difficulty_level`.")
+    
+    uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            expected_cols = ["student_id", "topic", "score", "time_spent", "attempts", "difficulty_level"]
+            
+            if all(col in df.columns for col in expected_cols):
+                st.write("Preview:")
+                st.dataframe(df.head())
+                
+                if st.button("Process Bulk Upload", type="primary", use_container_width=True):
+                    with st.spinner("Processing records..."):
+                        success_count = 0
+                        for _, row in df.iterrows():
+                            payload = {
+                                "student_id": int(row["student_id"]),
+                                "topic": str(row["topic"]),
+                                "score": float(row["score"]),
+                                "time_spent": float(row["time_spent"]),
+                                "attempts": int(row["attempts"]),
+                                "difficulty_level": int(row["difficulty_level"])
+                            }
+                            try:
+                                res = requests.post("http://127.0.0.1:8000/predict", json=payload, timeout=5)
+                                if res.status_code == 200:
+                                    success_count += 1
+                            except Exception:
+                                pass
+                        
+                        st.success(f"Successfully processed {success_count} out of {len(df)} records!")
+            else:
+                st.error(f"Missing columns. Expected: {', '.join(expected_cols)}")
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
+
 def render_analytics_dashboard():
     st.markdown("---")
-    st.markdown("### 📈 Cohort Analytics Dashboard")
+    is_student = st.session_state.role == "Student"
+    
+    if is_student:
+        st.markdown("### 📈 My Learning Analytics Dashboard")
+    else:
+        st.markdown("### 📈 Cohort Analytics Dashboard")
     
     try:
         df = load_data()
         
         if df is None or len(df) == 0:
-            st.info("No historical data available to generate analytics. Submit predictions to populate the dashboard.")
+            if is_student:
+                st.info("No analytics data found for your student profile yet. Complete an assessment first.")
+            else:
+                st.info("No historical data available to generate analytics. Submit predictions to populate the dashboard.")
             return
             
+        if is_student:
+            logged_in_student_id = st.session_state.student_id
+            df = df[df["student_id"].astype(str) == str(logged_in_student_id)]
+            if len(df) == 0:
+                st.info("No analytics data found for your student profile yet. Complete an assessment first.")
+                return
+                
         # Filters
         with st.container():
             f1, f2 = st.columns(2)
             
-            is_student = st.session_state.role == "Student"
-            
             if is_student:
-                student_filter = st.session_state.student_id
-                f1.info(f"Viewing analytics strictly for Student ID: {student_filter}")
+                student_filter = "All Students"
+                f1.info(f"Viewing analytics strictly for your Student ID: {logged_in_student_id}")
             else:
                 student_filter = f1.selectbox("Filter by Student", ["All Students"] + sorted(list(df["student_id"].unique())))
                 
             topic_filter = f2.selectbox("Filter by Topic", ["All Topics"] + sorted(list(df["topic"].unique())))
             
             filtered_df = df.copy()
-            if student_filter != "All Students":
+            if not is_student and student_filter != "All Students":
                 filtered_df = filtered_df[filtered_df["student_id"] == student_filter]
             if topic_filter != "All Topics":
                 filtered_df = filtered_df[filtered_df["topic"] == topic_filter]
@@ -355,11 +419,18 @@ def render_analytics_dashboard():
 
         # Top KPIs
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Total Evaluations", len(filtered_df))
-        k2.metric("Average Score", f"{filtered_df['score'].mean():.1f}%")
-        k3.metric("Avg Attempts", f"{filtered_df['attempts'].mean():.1f}")
         high_risk_pct = (len(filtered_df[filtered_df["risk_level"] == "High"]) / len(filtered_df)) * 100
-        k4.metric("High Risk Population", f"{high_risk_pct:.1f}%")
+        
+        if is_student:
+            k1.metric("My Evaluations", len(filtered_df))
+            k2.metric("My Average Score", f"{filtered_df['score'].mean():.1f}%")
+            k3.metric("My Avg Attempts", f"{filtered_df['attempts'].mean():.1f}")
+            k4.metric("My High Risk Attempts", f"{high_risk_pct:.1f}%")
+        else:
+            k1.metric("Total Evaluations", len(filtered_df))
+            k2.metric("Average Score", f"{filtered_df['score'].mean():.1f}%")
+            k3.metric("Avg Attempts", f"{filtered_df['attempts'].mean():.1f}")
+            k4.metric("High Risk Population", f"{high_risk_pct:.1f}%")
         
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -367,7 +438,7 @@ def render_analytics_dashboard():
         c1, c2 = st.columns(2)
         
         with c1:
-            st.markdown("#### Risk Distribution")
+            st.markdown(f"#### {'My Risk Distribution' if is_student else 'Risk Distribution'}")
             risk_df = filtered_df["risk_level"].value_counts().reset_index()
             risk_df.columns = ["Risk Level", "Count"]
             
@@ -384,7 +455,7 @@ def render_analytics_dashboard():
             st.plotly_chart(fig_donut, use_container_width=True)
             
         with c2:
-            st.markdown("#### Mastery Attainment")
+            st.markdown(f"#### {'My Mastery Progress' if is_student else 'Mastery Attainment'}")
             mastery_df = filtered_df["mastery_level"].value_counts().reset_index()
             mastery_df.columns = ["Mastery Level", "Count"]
             
@@ -401,8 +472,32 @@ def render_analytics_dashboard():
 
         st.markdown("<br>", unsafe_allow_html=True)
         
+        # Subject-wise scores for a specific student
+        if is_student:
+            st.markdown("#### My Subject-wise Scores")
+        elif student_filter != "All Students":
+            st.markdown(f"#### Subject-wise Scores for Student ID: {student_filter}")
+            
+        if is_student or student_filter != "All Students":
+            # Since there could be multiple attempts per topic, take the max score achieved per topic
+            subject_df = filtered_df.groupby("topic")["score"].max().reset_index()
+            
+            fig_subject = px.bar(
+                subject_df,
+                x="topic",
+                y="score",
+                color="topic",
+                text="score",
+                color_discrete_sequence=px.colors.qualitative.Pastel
+            )
+            fig_subject.update_traces(texttemplate='%{text:.1f}%', textposition='outside', hovertemplate="%{x}: %{y}%<extra></extra>")
+            fig_subject.update_layout(margin=dict(t=20, b=20, l=20, r=20), showlegend=False, xaxis_title="Subject", yaxis_title="Highest Score (%)")
+            fig_subject.update_yaxes(range=[0, max(100, subject_df['score'].max() + 15) if not subject_df.empty else 100])
+            st.plotly_chart(fig_subject, use_container_width=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            
         # Time-Series / Trend Section
-        st.markdown("#### Longitudinal Score Trend")
+        st.markdown(f"#### {'My Score Trend' if is_student else 'Longitudinal Score Trends'}")
         
         # 1. Create proper time/sequence axis and moving average
         trend_df = filtered_df.reset_index(drop=True).copy()
@@ -499,6 +594,69 @@ def render_analytics_dashboard():
     except Exception as e:
         st.error(f"Analytics Engine Error: Unable to load dashboard data. ({e})")
 
+def render_nlp_essay(student_id, topic):
+    st.markdown("### 📝 NLP Essay Evaluation")
+    st.info(f"Submit a short essay on **{topic}** to be graded by the AI NLP Engine.")
+    essay_text = st.text_area("Write your legal analysis here:", height=150)
+    if st.button("Evaluate Essay", type="primary"):
+        with st.spinner("Analyzing text..."):
+            try:
+                payload = {"student_id": student_id, "topic": topic, "essay_text": essay_text}
+                res = requests.post("http://127.0.0.1:8000/evaluate-essay", json=payload, timeout=10)
+                if res.status_code == 200:
+                    data = res.json()
+                    st.metric("NLP Score", f"{data['score']}%")
+                    st.success(f"**Feedback:** {data['feedback']}")
+                    st.info(f"**Key Concepts Found:** {', '.join(data['key_concepts_found']) if data['key_concepts_found'] else 'None'}")
+                else:
+                    st.error("Error from NLP Engine.")
+            except Exception as e:
+                st.error(f"Connection failed: {e}")
+
+def render_genai_cases(student_id, topic):
+    st.markdown("### 🧠 GenAI Case Generation")
+    st.info("Dynamically generate custom legal scenarios based on your current topic.")
+    if st.button("Generate Case Study", type="primary"):
+        with st.spinner("Generating..."):
+            try:
+                res = requests.post("http://127.0.0.1:8000/generate-scenario", json={"student_id": student_id, "weak_topic": topic}, timeout=10)
+                if res.status_code == 200:
+                    data = res.json()
+                    st.markdown(f"**Generated Scenario ({topic}):**")
+                    st.write(data["scenario_text"])
+                    st.markdown("**Questions to Consider:**")
+                    for q in data["questions"]:
+                        st.write(f"- {q}")
+            except Exception as e:
+                st.error("API Error")
+                
+def render_ai_tutor_chat():
+    st.markdown("### 🤖 SLM AI Tutor Chat")
+    query = st.text_input("Ask a legal concept question:")
+    if st.button("Ask Tutor", type="primary"):
+        with st.spinner("Thinking..."):
+            try:
+                res = requests.post("http://127.0.0.1:8000/tutor-chat", json={"query": query}, timeout=10)
+                if res.status_code == 200:
+                    st.info(f"**AI Tutor:** {res.json()['response']}")
+            except:
+                st.error("Tutor offline.")
+
+def render_agent_alert(student_id):
+    st.markdown("---")
+    st.markdown("### 🕵️ Proactive Agentic AI")
+    if st.button("Run Background Audit (Simulate)", use_container_width=True):
+        with st.spinner("Auditing student profile..."):
+            try:
+                res = requests.get(f"http://127.0.0.1:8000/agent-audit/{student_id}", timeout=10)
+                if res.status_code == 200:
+                    data = res.json()
+                    st.warning(data["agent_alert"])
+                    st.info(f"**Recommended Action:** {data['recommended_action']}")
+                    st.text_area("Drafted Email for Student:", data["email_draft"], height=150)
+            except:
+                st.error("Agent offline.")
+
 # ================= MAIN APP =================
 def main():
     if "logged_in" not in st.session_state:
@@ -511,12 +669,43 @@ def main():
         
         student_id, topic, score, time_spent, attempts, difficulty_level, submit = render_sidebar()
         
-        if submit:
-            render_prediction_panel(student_id, topic, score, time_spent, attempts, difficulty_level)
-        else:
-            st.info("👈 Please enter student metrics in the sidebar and click 'Generate Prediction' to analyze a student.")
+        if st.session_state.role == "Admin":
+            st.sidebar.markdown("---")
+            render_agent_alert(student_id)
             
-        render_analytics_dashboard()
+            tabs = st.tabs(["🎯 Live Prediction", "📝 NLP Essay", "🧠 GenAI Cases", "🤖 Tutor Chat", "📂 Bulk File Upload", "📈 Analytics Dashboard"])
+            with tabs[0]:
+                if submit: render_prediction_panel(student_id, topic, score, time_spent, attempts, difficulty_level)
+                else: st.info("👈 Enter metrics and click 'Generate Prediction'")
+            with tabs[1]: render_nlp_essay(student_id, topic)
+            with tabs[2]: render_genai_cases(student_id, topic)
+            with tabs[3]: render_ai_tutor_chat()
+            with tabs[4]: render_bulk_upload()
+            with tabs[5]: render_analytics_dashboard()
+                
+        elif st.session_state.role == "Teacher":
+            st.sidebar.markdown("---")
+            render_agent_alert(student_id)
+            
+            tabs = st.tabs(["🎯 Live Prediction", "📝 NLP Essay", "🧠 GenAI Cases", "🤖 Tutor Chat", "📂 Bulk File Upload", "📈 Analytics Dashboard"])
+            with tabs[0]:
+                if submit: render_prediction_panel(student_id, topic, score, time_spent, attempts, difficulty_level)
+                else: st.info("👈 Enter metrics and click 'Generate Prediction'")
+            with tabs[1]: render_nlp_essay(student_id, topic)
+            with tabs[2]: render_genai_cases(student_id, topic)
+            with tabs[3]: render_ai_tutor_chat()
+            with tabs[4]: render_bulk_upload()
+            with tabs[5]: render_analytics_dashboard()
+                
+        else:
+            tabs = st.tabs(["🎯 Live Prediction", "📝 NLP Essay", "🧠 GenAI Cases", "🤖 Tutor Chat", "📈 Analytics Dashboard"])
+            with tabs[0]:
+                if submit: render_prediction_panel(student_id, topic, score, time_spent, attempts, difficulty_level)
+                else: st.info("👈 Enter metrics and click 'Generate Prediction'")
+            with tabs[1]: render_nlp_essay(student_id, topic)
+            with tabs[2]: render_genai_cases(student_id, topic)
+            with tabs[3]: render_ai_tutor_chat()
+            with tabs[4]: render_analytics_dashboard()
 
 if __name__ == "__main__":
     main()

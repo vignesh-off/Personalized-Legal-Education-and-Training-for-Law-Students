@@ -6,59 +6,79 @@ echo ===========================================
 echo Starting Legal Education AI Platform
 echo ===========================================
 
-:: Change directory to the location of this batch file
+:: Start from the project root directory
 cd /d "%~dp0"
 
-if not exist "requirements.txt" (
-    echo ERROR: requirements.txt not found.
-    echo Please run this file from the project folder.
-    pause
-    exit /b 1
-)
-
-echo [1/5] Checking Python...
-where python > nul 2>&1
+echo [1/8] Checking for Python 3.11...
+py -3.11 --version > nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Python is not installed or not added to PATH.
-    echo Install Python 3.10 or newer, then run this file again.
+    echo Python 3.11 is required. Please install Python 3.11 and enable Add to PATH.
     pause
     exit /b 1
 )
+echo Python 3.11 found.
 
-echo [2/5] Preparing virtual environment...
-if not exist ".venv\Scripts\python.exe" (
-    python -m venv .venv
-    if errorlevel 1 (
-        echo ERROR: Failed to create virtual environment.
-        pause
-        exit /b 1
-    )
+echo [2/8] Setting up local virtual environment (.venv)...
+if not exist ".venv" (
+    echo Creating new virtual environment using Python 3.11...
+    py -3.11 -m venv .venv
+) else (
+    echo Virtual environment already exists.
 )
 
-echo [3/5] Installing project dependencies...
-".venv\Scripts\python.exe" -m pip install --upgrade pip
+echo [3/8] Activating .venv...
+call .venv\Scripts\activate
+set PYTHONNOUSERSITE=1
+
+echo [4/8] Upgrading pip, setuptools, wheel...
+.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel > nul
+
+echo [5/8] Installing critical binary wheels first...
+.venv\Scripts\python.exe -m pip install --only-binary=:all: --no-cache-dir numpy==1.26.4 pandas==2.2.2 pydantic==2.8.2 pydantic-core==2.20.1
 if errorlevel 1 (
-    echo ERROR: Failed to upgrade pip.
+    echo Wrong Python version or architecture. Use 64-bit Python 3.11.
     pause
     exit /b 1
 )
 
-".venv\Scripts\python.exe" -m pip install -r requirements.txt
+echo [6/8] Installing requirements...
+.venv\Scripts\python.exe -m pip install --only-binary=:all: --no-cache-dir -r requirements.txt
 if errorlevel 1 (
-    echo ERROR: Failed to install dependencies.
+    echo Wrong Python version or architecture. Use 64-bit Python 3.11.
     pause
     exit /b 1
 )
 
-echo [4/5] Starting FastAPI Backend on Port 8000...
-start "FastAPI Backend" /D "%~dp0" cmd /k ".venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
+echo [7/8] Verifying imports...
+.venv\Scripts\python.exe -c "import numpy, pandas, pydantic, fastapi, streamlit; print('Dependencies OK')"
+if errorlevel 1 (
+    echo ERROR: Dependency verification failed.
+    pause
+    exit /b 1
+)
 
-:: Wait 8 seconds to let backend fully initialize
-timeout /t 8 /nobreak > nul
+echo [8/8] Starting Application...
+echo Stopping any existing processes on ports 8000 and 8501...
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8000 ^| findstr LISTENING') do taskkill /F /PID %%a > nul 2>&1
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8501 ^| findstr LISTENING') do taskkill /F /PID %%a > nul 2>&1
+echo Starting backend on port 8000...
+start "Legal Backend" cmd /c "call .venv\Scripts\activate && .venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
 
-echo [5/5] Starting Streamlit Frontend...
-start "Streamlit Frontend" /D "%~dp0" cmd /k ".venv\Scripts\python.exe -m streamlit run frontend.py"
+echo Waiting 5 seconds for backend to initialize...
+timeout /t 5 /nobreak > nul
 
-echo Setup complete! Keep the terminal windows open while presenting.
+echo Starting frontend on port 8501...
+start "Legal Frontend" cmd /c "call .venv\Scripts\activate && .venv\Scripts\python.exe -m streamlit run frontend.py --server.port 8501"
+
+echo Waiting 5 seconds for frontend to initialize...
+timeout /t 5 /nobreak > nul
+
+echo Open the app manually at: http://localhost:8501
+
+echo ===========================================
+echo Platform is now running!
+echo Backend is running in the "Legal Backend" window.
+echo Frontend is running in the "Legal Frontend" window.
+echo Close those windows or use stop_project.bat to stop the platform.
+echo ===========================================
 pause
-exit

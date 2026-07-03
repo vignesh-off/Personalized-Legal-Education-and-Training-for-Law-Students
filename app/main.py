@@ -5,7 +5,10 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 from ml.dl_model import predict_dl
-from .schemas import StudentDataInput, PredictionOutput, DLPredictionOutput
+from .schemas import StudentDataInput, PredictionOutput, DLPredictionOutput, EssayInput, EssayOutput, ScenarioInput, ScenarioOutput, ChatInput, ChatOutput
+from app.services.nlp_service import evaluate_essay_mock
+from app.services.llm_service import generate_scenario_mock, tutor_chat_mock
+from app.agents.tutor_agent import run_agentic_audit_mock
 
 # Global variables to hold the loaded models
 ml_models = {}
@@ -113,7 +116,7 @@ async def predict_mastery(data: StudentDataInput):
     # Predict mastery level
     try:
         prediction = ml_models["model"].predict(scaled_features)
-        mastery_level = prediction[0]
+        mastery_level = str(prediction[0])
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during prediction: {str(e)}")
         
@@ -161,3 +164,22 @@ async def predict_dl_endpoint(data: StudentDataInput):
         dl_confidence=confidence,
         dl_message=message
     )
+
+@app.post("/evaluate-essay", response_model=EssayOutput)
+async def evaluate_essay_endpoint(data: EssayInput):
+    result = evaluate_essay_mock(data.topic, data.essay_text)
+    return EssayOutput(**result)
+
+@app.post("/generate-scenario", response_model=ScenarioOutput)
+async def generate_scenario_endpoint(data: ScenarioInput):
+    result = generate_scenario_mock(data.weak_topic)
+    return ScenarioOutput(scenario_text=result["text"], questions=result["questions"])
+
+@app.post("/tutor-chat", response_model=ChatOutput)
+async def tutor_chat_endpoint(data: ChatInput):
+    response = tutor_chat_mock(data.query)
+    return ChatOutput(response=response)
+
+@app.get("/agent-audit/{student_id}")
+async def agent_audit_endpoint(student_id: int):
+    return run_agentic_audit_mock(student_id)
